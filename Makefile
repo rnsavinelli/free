@@ -5,7 +5,7 @@
 # See free.c for license and copyright information.
 #
 
-VER         = 0.5.2
+VER         = 0.5.3
 
 CWD         = $(shell pwd)
 PREFIX      ?= /usr/local

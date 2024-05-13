@@ -39,23 +39,15 @@ static void set_units(int *units, int type) {
     *units = type;
 }
 
-int get_xsw(struct xsw_usage *xsw){
-    int mib[2] = {CTL_VM, VM_SWAPUSAGE};
-    size_t xswlen = sizeof(*xsw);
-
-    return sysctl(mib, 2, xsw, &xswlen, NULL, 0);
-}
-
 int main(int argc, char **argv) {
     int div = 1, units = -1;
     kern_return_t ke = KERN_SUCCESS;
     mach_port_t host;
     vm_size_t hps;
     vm_statistics_data_t hs;
-    mem_t ms, sw;
+    mem_t ms;
     mach_msg_type_number_t memsz, vmsz;
     struct host_basic_info hbi;
-    struct xsw_usage xsw;     
 
     /* parse our command line options */
     char option;
@@ -110,11 +102,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    /* get swap usage */
-    if (get_xsw(&xsw)) {
-        return EXIT_FAILURE;
-    }
-
     /* select divisor */
     if (units == KILOBYTES) {
         div = 1024;
@@ -129,9 +116,6 @@ int main(int argc, char **argv) {
     ms.active = (hs.active_count * hps) / div;
     ms.inactive = (hs.inactive_count * hps) / div;
     ms.wired = (hs.wire_count * hps) / div;
-    sw.total = (xsw.xsu_total) / div;
-    sw.used = (xsw.xsu_used * hps) / div;
-    sw.free = ((xsw.xsu_total - xsw.xsu_used) * hps) / div;
 
     /* display the memory usage statistics */
     printf("%18s %10s %10s %10s %10s %10s\n",
@@ -139,8 +123,6 @@ int main(int argc, char **argv) {
     printf("Mem: %13llu %10llu %10llu %10llu %10llu %10llu\n",
             ms.total, ms.used, ms.free,
             ms.active, ms.inactive, ms.wired);
-    printf("Swap: %12llu %10llu %10llu\n",
-            sw.total, sw.used, sw.free);            
 
     return EXIT_SUCCESS;
 }
