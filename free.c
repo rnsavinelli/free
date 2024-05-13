@@ -22,6 +22,7 @@
 #include <mach/kern_return.h>
 #include <mach/host_info.h>
 #include <mach/host_priv.h>
+#include <sys/sysctl.h>
 
 #include "free.h"
 
@@ -38,34 +39,40 @@ static void set_units(int *units, int type) {
     *units = type;
 }
 
+int get_xsw(struct xsw_usage *xsw){
+    int mib[2] = {CTL_VM, VM_SWAPUSAGE};
+    size_t xswlen = sizeof(*xsw);
+
+    return sysctl(mib, 2, xsw, &xswlen, NULL, 0);
+}
+
 int main(int argc, char **argv) {
-    int poll = 0, div = 1, units = -1;
-    char c;
+    int div = 1, units = -1;
     kern_return_t ke = KERN_SUCCESS;
-    mach_port_t host, task;
+    mach_port_t host;
     vm_size_t hps;
     vm_statistics_data_t hs;
-    struct host_basic_info hbi;
-    mem_t ms;
+    mem_t ms, sw;
     mach_msg_type_number_t memsz, vmsz;
+    struct host_basic_info hbi;
+    struct xsw_usage xsw;     
 
     /* parse our command line options */
-    while ((c = getopt(argc, argv, "bkms:Vh?")) != -1) {
-        if (c == 'b') {
+    char option;
+    while ((option = getopt(argc, argv, "bkms:Vh?")) != -1) {
+        if (option == 'b') {
             set_units(&units, BYTES);
-        } else if (c == 'k') {
+        } else if (option == 'k') {
             set_units(&units, KILOBYTES);
-        } else if (c == 'm') {
+        } else if (option == 'm') {
             set_units(&units, MEGABYTES);
-        } else if (c == 's') {
-            poll = atoi(optarg);
-        } else if (c == 'V') {
-            printf("darwin-free version %s\n", _FREE_VERSION);
+        } else if (option == 'V') {
+            printf("free version %s\n", _FREE_VERSION);
             return EXIT_SUCCESS;
         } else {
             printf(FREE_USAGE, basename(argv[0]));
 
-            if (c == 'h' || c == '?') {
+            if (option == 'h' || option == '?') {
                 return EXIT_SUCCESS;
             }
 
@@ -74,11 +81,10 @@ int main(int argc, char **argv) {
     }
 
     if (units == -1) {
-        units = KILOBYTES;
+        units = MEGABYTES;
     }
 
     host = mach_host_self();
-    task = mach_task_self();
 
     /* set some preferred sizes */
     memsz = sizeof(hbi) / sizeof(integer_t);
@@ -91,52 +97,50 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    /* loop over this in case we are polling */
-    while (1) {
-        /* get the virtual memory page size for this machine */
-        if ((ke = host_page_size(host, &hps)) != KERN_SUCCESS) {
-            mach_error("host_page_size", ke);
-            return EXIT_FAILURE;
-        }
-
-        /* gather virtual memory statistics */
-        ke = host_statistics(host, HOST_VM_INFO, (host_info_t) &hs, &vmsz);
-        if (ke != KERN_SUCCESS) {
-            mach_error("host_statistics", ke);
-            return EXIT_FAILURE;
-        }
-
-        /* select divisor */
-        if (units == KILOBYTES) {
-            div = 1024;
-        } else if (units == MEGABYTES) {
-            div = 1048576;
-        }
-
-        /* we have collected data, put it into our structure */
-        ms.total = hbi.max_mem / div;
-        ms.used = ((hs.active_count + hs.inactive_count + hs.wire_count)
-                   * hps) / div;
-        ms.free = (hs.free_count * hps) / div;
-        ms.active = (hs.active_count * hps) / div;
-        ms.inactive = (hs.inactive_count * hps) / div;
-        ms.wired = (hs.wire_count * hps) / div;
-
-        /* display the memory usage statistics */
-        printf("%18s %10s %10s %10s %10s %10s\n",
-               "total", "used", "free", "active", "inactive", "wired");
-        printf("Mem: %13llu %10llu %10llu %10llu %10llu %10llu\n",
-               ms.total, ms.used, ms.free,
-               ms.active, ms.inactive, ms.wired);
-
-        /* does the loop continue? */
-        if (poll != 0) {
-            sleep(poll);
-            printf("\n");
-        } else {
-            break;
-        }
+    /* get the virtual memory page size for this machine */
+    if ((ke = host_page_size(host, &hps)) != KERN_SUCCESS) {
+        mach_error("host_page_size", ke);
+        return EXIT_FAILURE;
     }
+
+    /* gather virtual memory statistics */
+    ke = host_statistics(host, HOST_VM_INFO, (host_info_t) &hs, &vmsz);
+    if (ke != KERN_SUCCESS) {
+        mach_error("host_statistics", ke);
+        return EXIT_FAILURE;
+    }
+
+    /* get swap usage */
+    if (get_xsw(&xsw)) {
+        return EXIT_FAILURE;
+    }
+
+    /* select divisor */
+    if (units == KILOBYTES) {
+        div = 1024;
+    } else if (units == MEGABYTES) {
+        div = 1048576;
+    }
+
+    /* we have collected data, put it into our structure */
+    ms.total = hbi.max_mem / div;
+    ms.used = ((hs.active_count + hs.inactive_count + hs.wire_count) * hps) / div;
+    ms.free = (hs.free_count * hps) / div;
+    ms.active = (hs.active_count * hps) / div;
+    ms.inactive = (hs.inactive_count * hps) / div;
+    ms.wired = (hs.wire_count * hps) / div;
+    sw.total = (xsw.xsu_total) / div;
+    sw.used = (xsw.xsu_used * hps) / div;
+    sw.free = ((xsw.xsu_total - xsw.xsu_used) * hps) / div;
+
+    /* display the memory usage statistics */
+    printf("%18s %10s %10s %10s %10s %10s\n",
+            "total", "used", "free", "active", "inactive", "wired");
+    printf("Mem: %13llu %10llu %10llu %10llu %10llu %10llu\n",
+            ms.total, ms.used, ms.free,
+            ms.active, ms.inactive, ms.wired);
+    printf("Swap: %12llu %10llu %10llu\n",
+            sw.total, sw.used, sw.free);            
 
     return EXIT_SUCCESS;
 }
